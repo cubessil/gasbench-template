@@ -1,0 +1,1149 @@
+---
+title: "XXXX"
+subtitle: "Run X"
+analyst: "XXXXXX"
+run date: "XX/XX/XXXX"
+output:
+  html_document: 
+    df_print: paged
+    css: stylesheet.css
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_float: true
+    toc_depth: 3
+    code_folding: show
+editor_options:
+  chunk_output_type: inline
+---
+
+# Summary of data reduction and run:
+                  
+                    
+# Load libraries, data, and define standards
+## load necessary R libraries and data, define accepted standard values for correcting standards
+```{r load-stuff}
+#devtools::install_github("isoverse/isoprocessor") 
+
+library(isoprocessor)
+library(tidyverse)
+library(stringr)
+library(openxlsx)
+library(plotly)
+library(isoreader)
+library(isoprocessCUBES) #if loading this package for the first time, be sure to install the "devtools" package first, then install the isoprocessCUBES package: devtools::install_github("CUBESSIL/isoprocessCUBES")
+```
+
+## load data
+```{r load-data}
+rawfiles.directory<- file.path(".")  #enter the name of your raw data folder here; should be in the same directory as your .Rproj file
+
+session<-"XXXXX"  #update this to name your own session
+Run <- "XXX"
+
+dxf_files<-iso_read_continuous_flow(rawfiles.directory,read_vendor_data_table = TRUE,quiet = T) #reads in raw data files and extracts necessary data
+dxf_files <- iso_omit_files_with_problems(dxf_files)
+
+dxf_data <- iso_get_vendor_data_table(dxf_files, include_file_info = everything()) #converts necessary data into usable data frame
+
+raw.data <- dxf_data %>% 
+  # exclude flush gas; change to check gas if that is the term used
+  filter(`Identifier 2` !="Flush Gas") %>%
+  #changes column names to match input file headers; adjust as needed if someone puts data in different column than normal in the sequence file
+  rename(row = Row,      
+         mass = Comment, 
+         Identifier1 = `Identifier 1`, 
+         type = `Identifier 2`,
+         d13Craw = `d 13C/12C`,
+         d18Oraw = `d 18O/16O`,
+         Area44 = `Intensity 44`) %>%    
+  #changes mass data type to numeric data instead of character
+  mutate(mass = as.numeric(mass), row = as.numeric(row))  %>%
+  #if needed, make specific changes in individual cells; comment out if not needed; this example removes a space of some of the entries for "sample" so they are all the same
+  mutate(#type = str_replace(type, "sampled", "mon.std"),
+         `Identifier1` = ifelse(`Identifier1`== "YULE", "CU YULE", `Identifier1`),
+          Identifier1 = ifelse(Analysis== 20302, "CU YULE", Identifier1),
+          Identifier1 = ifelse(Analysis== 20303, "IAEA-603", Identifier1),
+          Identifier1 = ifelse(Analysis== 20304, "Merck", Identifier1),
+          type = ifelse(Analysis== 20302, "drift.std", type),
+          type = ifelse(Analysis== 20303, "mon.std", type),
+          type = ifelse(Analysis== 20304, "dis2.std", type)
+         
+         ) 
+  
+#another way to change miss labeled or typos
+#updating name and mass for 2 swapped standards (based on their isotope values and adjacent positions)
+raw.data[  raw.data$Analysis == 9100, "Identifier1"] <- "HIS"
+raw.data[  raw.data$Analysis == 9100, "mass"] <- 99
+raw.data[  raw.data$Analysis == 9101, "Identifier1"] <- "NBS18"
+raw.data[  raw.data$Analysis == 9101, "mass"] <- 96
+```
+
+## define standards and standard values
+```{r define-stnds}
+#input all standard values in PDB mineral values; be sure to adjust for YOUR standards
+Standards <- readRDS(url("https://github.com/cubessil/clumpsDRcodes/blob/master/Standards.RDS?raw=true"))
+
+ corr.std<-"CU YULE"  #enter your standard names here
+ dis2.std<-"NBS18"
+ dis.std<-"Merck"
+ mon.std<-"IAEA-603"
+
+ Standardsforthisrun <- Standards %>% select(Sample.ID, d13C,d18O) %>% filter(Sample.ID %in% c(corr.std, mon.std, dis.std, dis2.std)) %>%  
+   rename("std.name"= Sample.ID,
+          "C.acc" = d13C,
+          "O.acc" = d18O)
+
+ C.stds.table <- Standardsforthisrun %>% select(std.name, C.acc)
+ O.stds.table <- Standardsforthisrun %>% select(std.name, O.acc)
+
+#if you run just the code above it matches the tables as below. However at some point in the code it looks for C.acc and O.acc as a variable not from a table.
+#if I add the below code it fixes it but as you can guess this is not ideal  
+C.acc <-  C.stds.table %>% filter(std.name == corr.std)
+C.acc <- C.acc$C.acc 
+O.acc <-  O.stds.table %>% filter(std.name == corr.std)
+O.acc <- O.acc$O.acc 
+```
+
+
+
+## average peaks and identify samples with too few peaks for culling
+```{r avg.peaks, fig.width=10, fig.height=15}
+data <- 
+  raw.data %>% 
+  filter(Nr. > 5) %>%
+  group_by(row, file_id, Analysis, Identifier1, mass, type) %>% 
+  summarize(
+    num.peaks=n(),
+    d13C.raw=mean(as.numeric(d13Craw)),
+    d13C.sd=sd(d13Craw),
+    d18O.raw.SMOW=mean(as.numeric(d18Oraw)),
+    d18O.sd=sd(d18Oraw),
+    area44=mean(as.numeric(Area44)),
+    area44.sd=sd(Area44),
+    inv.area44=1/area44
+  ) %>% mutate(
+    Do_not_use ="", 
+    Why_culled =""
+  )
+
+culled.data<- raw.data %>% 
+  group_by(row, file_id, Analysis, Identifier1, mass, type) %>% 
+  summarize(
+    num.peaks=n()) %>%
+  filter (num.peaks<6)
+  
+culled.data <-  bind_rows(culled.data, filter(data, num.peaks==1))
+
+data$d18O.raw<-(data$d18O.raw.SMOW-41.43)/1.04143 #d18O output is CO2 SMOW, so need to use the CO2 SMOW to min PDB conversion
+
+stdev<-gather(filter(data, num.peaks>1, d18O.sd<100), key = "isotope",
+              value= "stdev", d13C.sd, d18O.sd)
+```
+
+# Initial dataset check plots and culling
+
+## First round of culling:
+Identify outliers: Look at standard deviations of the stable isotope values of the individual peaks (typically there are 10 peaks). Often the "cutoff" of outliers tends to be sd of 0.075 - 0.1 permil, and coincides with small peak areas
+```{r plot.stnds, fig.height=20, fig.width=15}
+sd.values<-ggplot(stdev, aes(x=row, y=stdev, fill=Identifier1)) +
+  geom_point(size=3, shape=21) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  guides(fill=FALSE) +
+  facet_grid(. ~ isotope)
+
+sd.hist<-ggplot(stdev, aes(x=stdev, fill=isotope)) +
+  geom_histogram(binwidth=.01) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  guides(fill=FALSE) +
+  facet_grid(. ~ isotope)
+
+sd.box<-ggplot(stdev, aes(x=isotope, y=stdev, fill=isotope)) +
+  geom_boxplot()
+
+sd.v.area44<-ggplot(stdev, aes(x=area44, y=stdev, fill=factor(num.peaks))) +
+  geom_point(size=3, shape=21) +
+  scale_fill_discrete() +
+  facet_grid(. ~ isotope)
+
+multiplot(sd.values, sd.hist, sd.box, sd.v.area44, cols=1)
+```
+
+Remove major outliers based on large standard deviation of peaks, then redo plots - also, adds culled data to "culled data" tab that shows samples and standards that shouldn't be used
+```{r cull.outliers.1, fig.width=10, fig.height=15}
+#adjust line 121: change the value of d18O.sd.cutoff to match the cutoff of outliers based on the previous plots; default is 0.1
+d18O.sd.cutoff <- 0.5
+
+culled.data <- bind_rows(culled.data, subset(data, d18O.sd>d18O.sd.cutoff))
+wo.culled <- subset(data, d18O.sd<d18O.sd.cutoff)
+
+stds1<- subset(data, type!="sample" & d18O.sd<d18O.sd.cutoff)
+
+stdev<-gather(wo.culled, key = "isotope",
+              value= "stdev", d13C.sd, d18O.sd)
+
+sd.values<-ggplot(stdev, aes(x=row, y=stdev, fill=Identifier1)) +
+  geom_point(size=3, shape=21) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  guides(fill=FALSE) +
+  facet_grid(. ~ isotope)
+
+sd.hist<-ggplot(stdev, aes(x=stdev, fill=isotope)) +
+  geom_histogram(binwidth=.005) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  guides(fill=FALSE) +
+  facet_grid(. ~ isotope)
+
+sd.box<-ggplot(stdev, aes(x=isotope, y=stdev, fill=isotope)) +
+  geom_boxplot()
+
+sd.v.area44<-ggplot(stdev, aes(x=area44, y=stdev, fill=factor(num.peaks))) +
+  geom_point(size=3, shape=21) +
+  scale_fill_discrete() +
+  facet_grid(. ~ isotope)
+  
+multiplot(sd.values, sd.hist, sd.v.area44, sd.box, cols=1)
+```
+
+## Calculate and plot yields
+Plot yields of all samples and standards, as well as just the standards, using INTERACTIVE plots. Look for major outliers that coincide with yield problems.
+Note that the linear model in the yield.stds figure here is based on ALL the standard data
+
+Check to see that samples all fall within linearity range, and for any other obvious outliers:
+* do linearity standards cover the area space of your samples and other standards?
+* do all the standards show typical trends between area and mass? Do you see very general trends like that in your samples (sample sets with wide ranges in weight percent carbonate will not show a strong relationship)?
+
+```{r cull.outliers.2, fig.width=10, fig.height=7}
+# adjust next line only: change #'s in stds.to.cull to reflect the row #'s that need to be culled, add row#'s as needed and rerun after looking at the new plots
+stds.to.cull <- c(NA) # #Analysis #s with yield problem and/or significant outlier in d13C or d18O, including samples smaller than linearity range that weren't caught by other culling steps
+                    
+stds.culled <- filter(stds1, Analysis %in% stds.to.cull)
+stds <- filter(stds1, !Analysis %in% stds.to.cull) 
+culled.data<-bind_rows(culled.data, stds.culled)
+
+stds<- data.frame(stds, cbind(predict.lm(lm(stds$area44 ~ stds$mass), interval=c("confidence"), level=0.95)))
+
+yield.all<-ggplot(data, aes(x=mass, y=area44, fill=type, label=Analysis)) +
+  geom_point(size=3, shape=22) +
+  theme_bw() +
+  labs(title= "all data")
+
+yield.stds<-ggplot(stds, aes(x=mass, y=area44, label=Analysis)) +
+  stat_smooth(method="lm") +   
+  geom_point(aes(fill=type, shape=type), size=2) +
+  theme_bw() +
+  scale_shape_manual(values=c(21,22,23,24,25)) +
+  labs(title= "standards - yield")
+  
+calc_std_means_d13C <- function(df) calc_means(df, "d13C.raw")
+
+d13C.stds <- 
+  ggplot(stds, aes(label=Analysis)) +
+  geom_hline(
+    data = calc_std_means_d13C,
+    mapping = aes(yintercept = yintercept, color = type, linetype = linetype)) +
+  geom_point(shape=21, mapping = aes(x=area44, y=d13C.raw, fill=type)) +
+  scale_linetype_manual(values = c(1, 3, 2, 3, 2)) + 
+  facet_grid(type ~ ., scales = "free") +
+  theme_bw() +
+  labs(title= "d13C standards - means and uncertainties")
+
+calc_std_means_d18O <- function(df) calc_means(df, "d18O.raw")
+
+d18O.stds <- 
+  ggplot(stds, aes(label=Analysis)) +
+  geom_hline(
+    data = calc_std_means_d18O,
+    mapping = aes(yintercept = yintercept, color = type, linetype = linetype)) +
+  geom_point(shape=21, mapping = aes(x=area44, y=d18O.raw, fill=type)) +
+  scale_linetype_manual(values = c(1, 3, 2, 3, 2)) + 
+  facet_grid(type ~ ., scales = "free") +
+  theme(legend.position = "none") +
+  theme_bw() +
+  labs(title= "d18O standards - means and uncertainties")
+
+ggplotly(yield.all) 
+ggplotly(yield.stds)
+ggplotly(d18O.stds)
+ggplotly(d13C.stds)
+```
+
+## Check peaks
+Makes plots of individual analysis files for analyses in the culled.data dataframe - use to check peak sizes, signs of atmospheric peaks, and other irregularities
+```{r plot.peaks.culled, fig.height=10}
+
+dxf_files %>% 
+  iso_filter_files(file_id %in% culled.data$file_id) %>% 
+  iso_plot_raw_data(data = c(44), panel = "file", color = "data")
+
+```
+
+```{r plot.peaks.more}
+#If there are any additional chromatograms needed, just input the analysis numbers into the more.files list, replacing data$Analysis[5] with analysis number(s) - for example c(9536, 9655) instead of c(data$Analysis[5]). data$Analysis[5] is just acting as a stand-in to prevent errors if no additional analyses are selected
+
+more.files <- c(data$Analysis[5])
+
+plot.more <- filter(data, Analysis %in% more.files)
+
+dxf_files %>% 
+  iso_filter_files(file_id %in% plot.more$file_id) %>% 
+  iso_plot_raw_data(data = c(44), panel = "file", color = "data")
+
+```
+
+## Calculate weight percent carbonate
+```{r calc.wgt.percent}
+yield.line <- lm(stds$mass ~ stds$area44)
+
+(yield.slope <- coef(yield.line)[[2]])
+(yield.intercept <- coef(yield.line)[[1]])
+
+data$PercentCO3 <- ((yield.slope * data$area44 + yield.intercept)/data$mass *100)
+
+data$target.wgt.ug <-  90/(data$PercentCO3/100)
+```
+
+# Carbon corrections
+## Calculate raw data means
+```{r calc.raw.means.C}
+
+raw.corr <- filter(stds, Identifier1==corr.std)
+raw.mon <- filter(stds, type=="mon.std")
+raw.dis <- filter(stds, type=="dis.std")
+raw.dis2 <- filter(stds, type=="dis2.std")
+
+C.stds.table$rawC.mean <- c(mean(raw.corr$d13C.raw), mean(raw.mon$d13C.raw), mean(raw.dis$d13C.raw), mean(raw.dis2$d13C.raw))
+C.stds.table$rawC.sd <- c(sd(raw.corr$d13C.raw), sd(raw.mon$d13C.raw), sd(raw.dis$d13C.raw), sd(raw.dis2$d13C.raw))
+
+O.stds.table$rawO.mean <- c(mean(raw.corr$d18O.raw), mean(raw.mon$d18O.raw), mean(raw.dis$d18O.raw), mean(raw.dis2$d18O.raw))
+O.stds.table$rawO.sd <- c(sd(raw.corr$d18O.raw), sd(raw.mon$d18O.raw), sd(raw.dis$d18O.raw), sd(raw.dis$d18O.raw))
+
+```
+
+## C Offset correction
+Evaluate average offset and standard deviation of combined linearity and drift standards. Does NOT include linearity or drift correction to data
+```{r offset.C, fig.width=10, fig.height=5}
+
+offsetC<-subset(stds, Identifier1==corr.std)
+
+(offsetC.mean<-mean(offsetC$d13C.raw))
+(offsetC.sd<-sd(offsetC$d13C.raw))
+
+offsetC$d13C.offset <- offsetC$d13C.raw +  (C.acc - offsetC.mean)
+
+(offsetcorrC.mean<-mean(offsetC$d13C.offset))
+(offsetcorrC.sd<-sd(offsetC$d13C.offset))
+
+d13C.offset<-ggplot(offsetC, aes(x=area44, y=d13C.offset, shape=type)) +
+  geom_point(fill="orange", size=3) +
+  geom_hline(yintercept=offsetcorrC.mean, colour="orange") +
+  geom_hline(yintercept=offsetcorrC.mean + offsetcorrC.sd, colour="orange", linetype="dashed") +
+  geom_hline(yintercept=offsetcorrC.mean - offsetcorrC.sd, colour="orange", linetype="dashed") +
+  geom_hline(yintercept=offsetcorrC.mean + 2*offsetcorrC.sd, colour="orange", linetype=3) +
+  geom_hline(yintercept=offsetcorrC.mean - 2*offsetcorrC.sd, colour="orange", linetype=3) +
+  scale_shape_manual(values=c(21,22,23,24,25)) +
+  annotate("text", y = offsetcorrC.mean + 0.01, x = min(offsetC$area44), 
+    label = paste0("mean: ", sprintf("%.2f", offsetcorrC.mean), " \U00B1 ", sprintf("%.2f", offsetcorrC.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE, colour="black") +
+  theme_bw() 
+
+d13C.offset.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=offsetC, aes(x=mass, y=area44), shape=21, fill="orange", size = 2) +
+  theme_bw()
+
+multiplot(d13C.offset, d13C.offset.mass, cols=2)
+```
+
+Assess effects: Apply offset correction to the whole dataset of raw values, and check the monitoring standards
+```{r apply.offset.corr.C, fig.width=10, fig.height=5}
+
+#apply offset correction to whole dataset
+data$d13C.offset <- data$d13C.raw +  (C.acc - offsetC.mean)
+stds$d13C.offset <- stds$d13C.raw +  (C.acc - offsetC.mean)
+
+#make monitoring standard dataset and dataset for additional standards used later for discrimination correction
+offsetC.mon <- subset(stds, Identifier1==mon.std)
+offsetC.dis <- subset(stds, Identifier1==dis.std)
+offsetC.dis2 <- subset(stds, Identifier1==dis2.std)
+
+
+#check monitoring standard response
+(offsetC.mon.mean<-mean(offsetC.mon$d13C.offset))
+(offsetC.mon.sd<-sd(offsetC.mon$d13C.offset))
+
+C.stds.table$offsetC.mean <- c(offsetcorrC.mean, offsetC.mon.mean, mean(offsetC.dis$d13C.offset), mean(offsetC.dis2$d13C.offset))
+C.stds.table$offsetC.sd <- c(offsetcorrC.sd, offsetC.mon.sd, sd(offsetC.dis$d13C.offset), sd(offsetC.dis2$d13C.offset))
+
+C.mon.offset<-ggplot(offsetC.mon, aes(x=area44, y=d13C.offset)) +
+  geom_point(shape=21, fill="orange") +
+  geom_hline(yintercept=offsetC.mon.mean, colour="orange") +
+  geom_hline(yintercept=offsetC.mon.mean + offsetC.mon.sd, colour="orange", linetype="dashed") +
+  geom_hline(yintercept=offsetC.mon.mean - offsetC.mon.sd, colour="orange", linetype="dashed") +
+  geom_hline(yintercept=offsetC.mon.mean + 2*offsetC.mon.sd, colour="orange", linetype=3) +
+  geom_hline(yintercept=offsetC.mon.mean - 2*offsetC.mon.sd, colour="orange", linetype=3) +
+  annotate("text", y = offsetC.mon.mean +0.01, x = min(offsetC.mon$area44), label = paste0("mean: ", sprintf("%.2f", offsetC.mon.mean), " \U00B1 ", sprintf("%.2f", offsetC.mon.sd, 2), " \U2030 (1 sd)"), size = 4, hjust=0, vjust=0, parse=FALSE) +
+  theme_bw()
+
+C.mon.offset.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=offsetC.mon, aes(x=mass, y=area44), shape=21, fill="orange", size = 2) +
+  theme_bw()
+
+multiplot(C.mon.offset, C.mon.offset.mass, cols=2)
+```
+
+## C Drift corrections
+Using the raw values, assess drift in isotope values throughout the run
+```{r drift.C, fig.width=10, fig.height=5}
+driftC<-subset(stds, type=="drift.std")
+
+drift.slopeC<-(coef(lm(as.numeric(driftC$d13C.raw) ~ driftC$row))[[2]])
+drift.interC<-(coef(lm(as.numeric(driftC$d13C.raw) ~ driftC$row))[[1]])
+
+#drift check
+driftC$d13C.drift<- driftC$d13C.raw + (C.acc - (drift.slopeC * driftC$row + drift.interC))
+
+(driftC.mean<-mean(driftC$d13C.drift))
+(driftC.sd<-sd(driftC$d13C.drift))
+
+C.drift<-ggplot(driftC, aes(x=row, y=d13C.raw)) +
+  geom_smooth(method=lm, colour="black") +
+  annotate("text", x = min(driftC$row), y = max(driftC$d13C.raw + 0.01), label = lm_eqn(driftC$row, driftC$d13C.raw),  size = 4, hjust=0, vjust=0, parse=TRUE, colour="black") +
+  geom_point(shape=21, fill="black", size=2) +
+  geom_point(aes(x=row, y=d13C.drift), fill="red", shape=21, size=2) +
+  geom_hline(aes(yintercept=C.acc), size=.5) +
+  geom_hline(yintercept = driftC.mean + driftC.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = driftC.mean - driftC.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = driftC.mean + 2*driftC.sd, colour="red", linetype=3) +
+  geom_hline(yintercept = driftC.mean - 2*driftC.sd, colour="red", linetype=3) +
+  annotate("text", 
+    y = driftC.mean +0.01, 
+    x = min(driftC$row),
+    label = paste0("mean: ", sprintf("%.2f", driftC.mean), " \U00B1 ", sprintf("%.2f", driftC.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE) +
+    theme_bw()
+
+C.drift.mass<-ggplot(stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=driftC, aes(x=mass, y=area44), shape=21, fill="red", size=3) +
+  theme_bw()
+
+multiplot(C.drift, C.drift.mass, cols=2)
+```
+
+Assess effects: Apply drift correction to the whole dataset of raw values, and check the monitoring standards
+```{r apply.drift.corr.C, fig.width=10, fig.height=5}
+data$d13C.drift <- data$d13C.raw +  (C.acc - (drift.slopeC * data$row + drift.interC))
+stds$d13C.drift <- stds$d13C.raw +  (C.acc - (drift.slopeC * stds$row + drift.interC))
+
+driftC.mon<-subset(stds, Identifier1==mon.std)
+driftC.dis <- subset(stds, Identifier1==dis.std)
+driftC.dis2 <- subset(stds, Identifier1==dis2.std)
+
+(driftC.mon.mean<-mean(driftC.mon$d13C.drift))
+(driftC.mon.sd<-sd(driftC.mon$d13C.drift))
+
+C.stds.table$driftC.mean <- c(driftC.mean, driftC.mon.mean, mean(driftC.dis$d13C.drift),mean(driftC.dis2$d13C.drift))
+C.stds.table$driftC.sd <- c(driftC.sd, driftC.mon.sd, sd(driftC.dis$d13C.drift),sd(driftC.dis2$d13C.drift))
+
+C.mon.drift<-ggplot(driftC.mon, aes(x=area44, y=d13C.drift)) +
+  geom_point(shape=21, fill="red") +
+  geom_hline(yintercept = driftC.mon.mean, colour="red") +
+  geom_hline(yintercept = driftC.mon.mean + driftC.mon.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = driftC.mon.mean - driftC.mon.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = driftC.mon.mean + 2*driftC.mon.sd, colour="red", linetype=3) +
+  geom_hline(yintercept = driftC.mon.mean - 2*driftC.mon.sd, colour="red", linetype=3) +
+  annotate("text",
+    y = driftC.mon.mean +0.01, 
+    x = min(driftC.mon$area44),
+    label = paste0("mean: ", sprintf("%.2f", driftC.mon.mean), " \U00B1 ", sprintf("%.2f", driftC.mon.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE, colour="red")
+
+C.mon.drift.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=driftC.mon, aes(x=mass, y=area44), shape=21, fill="red", size = 2) +
+  theme_bw()
+
+multiplot(C.mon.drift, C.mon.drift.mass, cols=2)
+```
+
+## C Linearity correction
+Using the raw values, assess drift in isotope values throughout the run
+```{r linearityC, fig.width=10, fig.height=5}
+linC<-subset(stds, type=="lin.std") 
+
+lin.slopeC<-(coef(lm(linC$d13C.raw ~ linC$inv.area44))[[2]])
+lin.interC<-(coef(lm(linC$d13C.raw ~ linC$inv.area44))[[1]])
+
+#linearity check
+linC$d13C.lin<-linC$d13C.raw + (C.acc - (lin.slopeC * linC$inv.area44 + lin.interC))
+
+(linC.mean<-mean(linC$d13C.lin))
+(linC.sd<-sd(linC$d13C.lin))
+
+C.lin.area44<-ggplot(linC, aes(x=area44, y=d13C.raw)) +
+  geom_point(shape=21, fill="blue") +
+  geom_smooth()  
+
+C.lincorr.invarea<-ggplot(linC, aes(x=inv.area44, y=d13C.raw)) +
+  geom_smooth(method=lm) +
+  annotate("text", x = min(linC$inv.area44), y = max(linC$d13C.raw + 0.01), label = lm_eqn(linC$inv.area44, linC$d13C.raw),  size = 4, hjust=0, vjust=0, parse=TRUE) +
+  geom_point(shape=21, fill="black", size=2) +
+  geom_point(aes(x=inv.area44, y=d13C.lin), fill="red", shape=22) +
+  geom_hline(aes(yintercept=C.acc), size=.5) +
+  geom_hline(yintercept = linC.mean + linC.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = linC.mean - linC.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = linC.mean + 2*linC.sd, colour="red", linetype=3) +
+  geom_hline(yintercept = linC.mean - 2*linC.sd, colour="red", linetype=3) +
+  annotate("text",
+    y = linC.mean +0.01, 
+    x = min(linC$inv.area44),
+    label = paste0("mean: ", sprintf("%.2f", linC.mean), " \U00B1 ", sprintf("%.2f", linC.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE) +
+    theme_bw()
+
+C.lin.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=linC, aes(x=mass, y=area44), shape=21, fill="blue", size = 2) +
+  theme_bw()
+
+multiplot(C.lin.area44, C.lincorr.invarea, C.lin.mass, cols=3)
+```
+
+Assess effects: Apply linearity correction to the whole dataset of raw values, and check the monitoring standards
+```{r apply.lin.corr.C, fig.width=10, fig.height=5}
+
+data$d13C.lin <- data$d13C.raw +  (C.acc - (lin.slopeC * data$inv.area44 + lin.interC))
+stds$d13C.lin <- stds$d13C.raw +  (C.acc - (lin.slopeC * stds$inv.area44 + lin.interC))
+
+linC.mon<-subset(stds, Identifier1==mon.std)
+linC.dis<-subset(stds, Identifier1==dis.std)
+linC.dis2<-subset(stds, Identifier1==dis2.std)
+
+(linC.mon.mean <- mean(linC.mon$d13C.lin))
+(linC.mon.sd<-sd(linC.mon$d13C.lin))
+
+C.stds.table$linC.mean <- c(linC.mean, linC.mon.mean, mean(linC.dis$d13C.lin),mean(linC.dis2$d13C.lin))
+C.stds.table$linC.sd <- c(linC.sd, linC.mon.sd, sd(linC.dis$d13C.lin), sd(linC.dis$d13C.lin))
+
+C.mon.lin<-ggplot(linC.mon, aes(x=area44, y=d13C.lin)) +
+  geom_point(shape=21, fill="blue") +
+  geom_hline(yintercept = linC.mon.mean, colour="blue") +
+  geom_hline(yintercept = linC.mon.mean + linC.mon.sd, colour="blue", linetype="dashed") +
+  geom_hline(yintercept = linC.mon.mean - linC.mon.sd, colour="blue", linetype="dashed") +
+  geom_hline(yintercept = linC.mon.mean + 2*linC.mon.sd, colour="blue", linetype=3) +
+  geom_hline(yintercept = linC.mon.mean - 2*linC.mon.sd, colour="blue", linetype=3) +
+  annotate("text",
+    y = linC.mon.mean +0.01, 
+    x = min(linC.mon$area44),
+    label = paste0("mean: ", sprintf("%.2f", linC.mon.mean), " \U00B1 ", sprintf("%.2f", linC.mon.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE, colour="blue")
+
+C.mon.lin.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=linC.mon, aes(x=mass, y=area44), shape=21, fill="blue", size = 2) +
+  theme_bw()
+
+multiplot(C.mon.lin, C.mon.lin.mass, cols=2)
+```
+
+## C Combined linearity + drift correction
+Because a run can be affected by both drift and linearity, here we assess the affects of apply both the linearity and drift corrections to the raw data. This uses the linearity corrected values, and looks at the drift in those values
+```{r lindrift.C, fig.width=10, fig.height=5}
+
+lindriftC <- merge(driftC, data[c("row", "d13C.lin")], by.x="row", by.y="row", all.x=TRUE, all.y=FALSE, sort=FALSE)
+
+lindrift.slopeC<-(coef(lm(lindriftC$d13C.lin ~ lindriftC$row))[[2]])
+lindrift.interC<-(coef(lm(lindriftC$d13C.lin ~ lindriftC$row))[[1]])
+
+#drift check
+lindriftC$d13C.lindrift<- lindriftC$d13C.lin + (C.acc - (lindrift.slopeC * lindriftC$row + lindrift.interC))
+
+(lindriftC.mean<-mean(lindriftC$d13C.drift))
+(lindriftC.sd<-sd(lindriftC$d13C.drift))
+
+C.lindrift<-ggplot(lindriftC, aes(x=row, y=d13C.lin)) +
+  geom_smooth(method=lm, colour="black") +
+  annotate("text", x = min(lindriftC$row), y = max(lindriftC$d13C.lin + 0.01), label = lm_eqn(lindriftC$row, lindriftC$d13C.lin),  size = 4, hjust=0, vjust=0, parse=TRUE, colour="black") +
+  geom_point(shape=21, fill="black", size=2) +
+  geom_point(aes(x=row, y=d13C.lindrift), fill="red", shape=22, size=2) +
+  geom_hline(aes(yintercept=C.acc), size=.5) +
+  geom_hline(yintercept = lindriftC.mean + lindriftC.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = lindriftC.mean - lindriftC.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = lindriftC.mean + 2*lindriftC.sd, colour="red", linetype=3) +
+  geom_hline(yintercept = lindriftC.mean - 2*lindriftC.sd, colour="red", linetype=3) +
+  annotate("text",
+    y = lindriftC.mean +0.01, 
+    x = min(lindriftC$row),
+    label = paste0("mean: ", sprintf("%.2f", lindriftC.mean), " \U00B1 ", sprintf("%.2f", lindriftC.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE) +
+    theme_bw()
+
+C.lindrift.mass<-ggplot(stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=lindriftC, aes(x=mass, y=area44), shape=21, fill="red", size=3) +
+  theme_bw()
+
+multiplot(C.lindrift, C.lindrift.mass, cols=2)
+```
+
+Assess effects: Apply drift correction to the whole dataset of linearity corrected values, and check the monitoring standards
+```{r apply.lindrift.corr.C, fig.width=10, fig.height=5}
+data$d13C.lindrift <- data$d13C.lin +  (C.acc - (lindrift.slopeC * data$row + lindrift.interC))
+stds$d13C.lindrift <- stds$d13C.lin +  (C.acc - (lindrift.slopeC * stds$row + lindrift.interC))
+
+lindriftC.mon<-subset(stds, Identifier1==mon.std)
+lindriftC.dis<-subset(stds, Identifier1==dis.std)
+lindriftC.dis2<-subset(stds, Identifier1==dis2.std)
+
+(lindriftC.mon.mean<-mean(lindriftC.mon$d13C.lindrift))
+(lindriftC.mon.sd<-sd(lindriftC.mon$d13C.lindrift))
+
+C.stds.table$lindriftC.mean <- c(lindriftC.mean, lindriftC.mon.mean, mean(lindriftC.dis$d13C.lindrift), mean(lindriftC.dis2$d13C.lindrift))
+C.stds.table$lindriftC.sd <- c(lindriftC.sd, lindriftC.mon.sd, sd(lindriftC.dis$d13C.lindrift),sd(lindriftC.dis$d13C.lindrift))
+
+C.mon.drift<-ggplot(lindriftC.mon, aes(x=area44, y=d13C.lindrift)) +
+  geom_point(shape=21, fill="red") +
+  geom_hline(yintercept = lindriftC.mon.mean, colour="red") +
+  geom_hline(yintercept = lindriftC.mon.mean + lindriftC.mon.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = lindriftC.mon.mean - lindriftC.mon.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = lindriftC.mon.mean + 2*lindriftC.mon.sd, colour="red", linetype=3) +
+  geom_hline(yintercept = lindriftC.mon.mean - 2*lindriftC.mon.sd, colour="red", linetype=3) +
+  annotate("text",
+    y = lindriftC.mon.mean +0.01, 
+    x = min(lindriftC.mon$area44),
+    label = paste0("mean: ", sprintf("%.2f", lindriftC.mon.mean), " \U00B1 ", sprintf("%.2f", lindriftC.mon.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE, colour="red")
+
+C.mon.drift.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=lindriftC.mon, aes(x=mass, y=area44), shape=21, fill="red", size = 2) +
+  theme_bw()
+
+multiplot(C.mon.drift, C.mon.drift.mass, cols=2)
+```
+
+## C Scale correction 
+Pick the appropriate column of either raw or corrected data to use in the scale regression. If there is no observable effects of linearity or drift (or both), use the raw values. The default is to select the raw values. Then this correct is applied to the whole dataset, using the same choice of previously corrected (or raw) values as used in making the scale correction
+```{r apply.scale.corr.C}
+
+# replace the character string here with the correction column you want to use
+col_for_scale_C <- "lindrift"  # options to substitute in here are: "raw" or "offset" or "drift" or  "lin" or  "lindrift"
+
+#make new table of measured scale correction values versus the accepted values
+col_in_data <- paste0("d13C.", col_for_scale_C)
+C.accepted <- C.stds.table %>%
+  select(std.name, C.acc)
+scale.stds <- stds %>%
+  #filter(Identifier1 == "NBS18" |Identifier1 == "Merck.UTSA") %>% #| Identifier1 == "CU YULE"
+  rename(std.name = Identifier1)
+  
+scale.corr <-  left_join(scale.stds, C.accepted, by = "std.name") %>%
+  select(std.name, C.acc, col_in_data) %>%
+  rename(d13C = col_in_data)
+F
+# safety checks
+if (!col_in_data %in% names(data)) stop("this column does not exist in data or stds table: ", col_in_data, call. = FALSE)
+
+# regression
+m <- lm(scale.corr$C.acc ~ scale.corr$d13C)
+scale.slopeC<-(coef(m)[[2]])
+scale.interC<-(coef(m)[[1]])
+R2 <- summary(m)$r.squared
+S <- summary(m)$sigma
+
+# apply correction
+data <- data %>%
+  mutate_(d13C.scale = lazyeval::interp(~scale.slopeC * var + scale.interC, var = as.name(col_in_data)))
+stds <- stds %>%
+  mutate_(d13C.scale = lazyeval::interp(~scale.slopeC * var + scale.interC, var = as.name(col_in_data)))
+
+C.scale.all <- 
+  ggplot(scale.corr, aes(x=d13C, y=C.acc)) +
+  geom_smooth(method="lm", color = "blue") +
+  geom_point(data=filter(data, d18O.sd<d18O.sd.cutoff), aes_string(x=col_in_data, y="d13C.scale"), shape=23, fill="red", size = 2) +
+  geom_point(shape=21, fill="blue", size = 2) +
+  geom_text(
+           x = max(scale.corr$d13C), 
+           y = max(scale.corr$C.acc), 
+           label = str_interp("C.acc = $[.2f]{slope} ${var} + $[.2f]{intercept} (R2: $[.4f]{R2}) (S: $[.3f]{S})", 
+                              list(slope = scale.slopeC, intercept = scale.interC, var = col_for_scale_C, R2 = R2, S = S)),
+           size = 4, hjust=1.1, vjust=0, colour="blue") +
+  labs(x = col_for_scale_C) +
+  theme_bw()
+
+C.scale.all
+```
+
+Assess effects: Check the monitoring standards after applying the scale correction
+```{r add_C_scale_to_stds.mean.table}
+scaleC.mon<-subset(stds, Identifier1==mon.std)
+scaleC.dis<-subset(stds, Identifier1==dis.std)
+scaleC.dis2<-subset(stds, Identifier1==dis2.std)
+scaleC.corr<-subset(stds, Identifier1==corr.std)
+
+(scaleC.mon.mean<-mean(scaleC.mon$d13C.scale))
+(scaleC.mon.sd<-sd(scaleC.mon$d13C.scale))
+
+C.stds.table$scaleC.mean <- c(mean(scaleC.corr$d13C.scale), scaleC.mon.mean, mean(scaleC.dis$d13C.scale), mean(scaleC.dis2$d13C.scale))
+C.stds.table$scaleC.sd <- c(sd(scaleC.corr$d13C.scale), scaleC.mon.sd, sd(scaleC.dis$d13C.scale), sd(scaleC.dis2$d13C.scale))
+```
+
+# Oxygen corrections
+## O Offset correction
+Evaluate average offset and standard deviation of combined linearity and drift standards. Does NOT include linearity or drift correction to data
+```{r offset.O, fig.width=10, fig.height=5}
+
+offsetO<-subset(stds, Identifier1==corr.std)
+
+(offsetO.mean<-mean(offsetO$d18O.raw))
+(offsetO.sd<-sd(offsetO$d18O.raw))
+
+offsetO$d18O.offset <- offsetO$d18O.raw +  (O.acc - offsetO.mean)
+
+(offsetcorrO.mean<-mean(offsetO$d18O.offset))
+(offsetcorrO.sd<-sd(offsetO$d18O.offset))
+
+d18O.offset<-ggplot(offsetO, aes(x=area44, y=d18O.offset, shape=type)) +
+  geom_point(fill="orange", size=3) +
+  geom_hline(yintercept=offsetcorrO.mean, colour="orange") +
+  geom_hline(yintercept=offsetcorrO.mean + offsetcorrO.sd, colour="orange", linetype="dashed") +
+  geom_hline(yintercept=offsetcorrO.mean - offsetcorrO.sd, colour="orange", linetype="dashed") +
+  geom_hline(yintercept=offsetcorrO.mean + 2*offsetcorrO.sd, colour="orange", linetype=3) +
+  geom_hline(yintercept=offsetcorrO.mean - 2*offsetcorrO.sd, colour="orange", linetype=3) +
+  scale_shape_manual(values=c(21,22,23,24,25)) +
+  annotate("text", y = offsetcorrO.mean + 0.01, x = min(offsetO$area44), 
+    label = paste0("mean: ", sprintf("%.2f", offsetcorrO.mean), " \U00B1 ", sprintf("%.2f", offsetcorrO.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE, colour="black") +
+  theme_bw() 
+
+d18O.offset.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=offsetO, aes(x=mass, y=area44), shape=21, fill="orange", size = 2) +
+  theme_bw()
+
+multiplot(d18O.offset, d18O.offset.mass, cols=2)
+```
+
+Assess effects: Apply offset correction to the whole dataset of linearity corrected values, and check the monitoring standards
+```{r apply.offset.corr.O, fig.width=10, fig.height=5}
+
+#apply offset correction to whole dataset
+data$d18O.offset <- data$d18O.raw +  (O.acc - offsetO.mean)
+stds$d18O.offset <- stds$d18O.raw +  (O.acc - offsetO.mean)
+
+#make monitoring standard dataset and dataset for additional standards used later for discrimination correction
+offsetO.mon <- subset(stds, Identifier1==mon.std)
+offsetO.dis <- subset(stds, Identifier1==dis.std)
+offsetO.dis2 <- subset(stds, Identifier1==dis2.std)
+
+#check monitoring standard response
+(offsetO.mon.mean<-mean(offsetO.mon$d18O.offset))
+(offsetO.mon.sd<-sd(offsetO.mon$d18O.offset))
+
+O.stds.table$offsetO.mean <- c(offsetcorrO.mean, offsetO.mon.mean, mean(offsetO.dis$d18O.offset), mean(offsetO.dis2$d18O.offset))
+O.stds.table$offsetO.sd <- c(offsetcorrO.sd, offsetO.mon.sd, sd(offsetO.dis$d18O.offset), sd(offsetO.dis2$d18O.offset))
+
+O.mon.offset<-ggplot(offsetO.mon, aes(x=area44, y=d18O.offset)) +
+  geom_point(shape=21, fill="orange") +
+  geom_hline(yintercept=offsetO.mon.mean, colour="orange") +
+  geom_hline(yintercept=offsetO.mon.mean + offsetO.mon.sd, colour="orange", linetype="dashed") +
+  geom_hline(yintercept=offsetO.mon.mean - offsetO.mon.sd, colour="orange", linetype="dashed") +
+  geom_hline(yintercept=offsetO.mon.mean + 2*offsetO.mon.sd, colour="orange", linetype=3) +
+  geom_hline(yintercept=offsetO.mon.mean - 2*offsetO.mon.sd, colour="orange", linetype=3) +
+  annotate("text", y = offsetO.mon.mean +0.01, x = min(offsetO.mon$area44), label = paste0("mean: ", sprintf("%.2f", offsetO.mon.mean), " \U00B1 ", sprintf("%.2f", offsetO.mon.sd, 2), " \U2030 (1 sd)"), size = 4, hjust=0, vjust=0, parse=FALSE) +
+  theme_bw()
+
+O.mon.offset.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=offsetO.mon, aes(x=mass, y=area44), shape=21, fill="orange", size = 2) +
+  theme_bw()
+
+multiplot(O.mon.offset, O.mon.offset.mass, cols=2)
+```
+
+## O Drift corrections
+Using the raw values, assess drift in isotope values throughout the run
+```{r drift.O, fig.width=10, fig.height=5}
+driftO<-subset(stds, type=="drift.std")
+
+drift.slopeO<-(coef(lm(driftO$d18O.raw ~ driftO$row))[[2]])
+drift.interO<-(coef(lm(driftO$d18O.raw ~ driftO$row))[[1]])
+
+#drift check
+driftO$d18O.drift<- driftO$d18O.raw + (O.acc - (drift.slopeO * driftO$row + drift.interO))
+
+(driftO.mean<-mean(driftO$d18O.drift))
+(driftO.sd<-sd(driftO$d18O.drift))
+
+O.drift<-ggplot(driftO, aes(x=row, y=d18O.raw)) +
+  geom_smooth(method=lm, colour="black") +
+  annotate("text", x = min(driftO$row), y = max(driftO$d18O.raw + 0.01), label = lm_eqn(driftO$row, driftO$d18O.raw),  size = 4, hjust=0, vjust=0, parse=TRUE, colour="black") +
+  geom_point(shape=21, fill="black", size=2) +
+  geom_point(aes(x=row, y=d18O.drift), fill="red", shape=22, size=2) +
+  geom_hline(aes(yintercept=O.acc), size=.5) +
+  geom_hline(yintercept = driftO.mean + driftO.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = driftO.mean - driftO.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = driftO.mean + 2*driftO.sd, colour="red", linetype=3) +
+  geom_hline(yintercept = driftO.mean - 2*driftO.sd, colour="red", linetype=3) +
+  annotate("text",
+    y = driftO.mean +0.01, 
+    x = min(driftO$row),
+    label = paste0("mean: ", sprintf("%.2f", driftO.mean), " \U00B1 ", sprintf("%.2f", driftO.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE) +
+    theme_bw()
+
+O.drift.mass<-ggplot(stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=driftO, aes(x=mass, y=area44), shape=21, fill="red", size=3) +
+  theme_bw()
+
+multiplot(O.drift, O.drift.mass, cols=2)
+```
+
+Assess effects: Apply drift correction to the whole dataset of linearity corrected values, and check the monitoring standards
+```{r apply.drift.corr.O, fig.width=10, fig.height=5}
+data$d18O.drift <- data$d18O.raw +  (O.acc - (drift.slopeO * data$row + drift.interO))
+stds$d18O.drift <- stds$d18O.raw +  (O.acc - (drift.slopeO * stds$row + drift.interO))
+
+driftO.mon<-subset(stds, Identifier1==mon.std)
+driftO.dis <- subset(stds, Identifier1==dis.std)
+driftO.dis2 <- subset(stds, Identifier1==dis2.std)
+
+(driftO.mon.mean<-mean(driftO.mon$d18O.drift))
+(driftO.mon.sd<-sd(driftO.mon$d18O.drift))
+
+O.stds.table$driftO.mean <- c(driftO.mean, driftO.mon.mean, mean(driftO.dis$d18O.drift), mean(driftO.dis2$d18O.drift))
+O.stds.table$driftO.sd <- c(driftO.sd, driftO.mon.sd, sd(driftO.dis$d18O.drift), sd(driftO.dis$d18O.drift)) 
+
+O.mon.drift<-ggplot(driftO.mon, aes(x=area44, y=d18O.drift)) +
+  geom_point(shape=21, fill="red") +
+  geom_hline(yintercept = driftO.mon.mean, colour="red") +
+  geom_hline(yintercept = driftO.mon.mean + driftO.mon.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = driftO.mon.mean - driftO.mon.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = driftO.mon.mean + 2*driftO.mon.sd, colour="red", linetype=3) +
+  geom_hline(yintercept = driftO.mon.mean - 2*driftO.mon.sd, colour="red", linetype=3) +
+  annotate("text",
+    y = driftO.mon.mean +0.01, 
+    x = min(driftO.mon$area44),
+    label = paste0("mean: ", sprintf("%.2f", driftO.mon.mean), " \U00B1 ", sprintf("%.2f", driftO.mon.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE, colour="red")
+
+O.mon.drift.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=driftO.mon, aes(x=mass, y=area44), shape=21, fill="red", size = 2) +
+  theme_bw()
+
+multiplot(O.mon.drift, O.mon.drift.mass, cols=2)
+```
+
+## O Linearity correction
+Using the raw values, assess drift in isotope values throughout the run
+```{r linearityO, fig.width=10, fig.height=5}
+linO<-subset(stds, type=="lin.std")
+
+lin.slopeO<-(coef(lm(linO$d18O.raw ~ linO$inv.area44))[[2]])
+lin.interO<-(coef(lm(linO$d18O.raw ~ linO$inv.area44))[[1]])
+
+#linearity check
+linO$d18O.lin<-linO$d18O.raw + (O.acc - (lin.slopeO * linO$inv.area44 + lin.interO))
+
+(linO.mean<-mean(linO$d18O.lin))
+(linO.sd<-sd(linO$d18O.lin))
+
+O.lin.area44<-ggplot(linO, aes(x=area44, y=d18O.raw)) +
+  geom_point(shape=21, fill="blue") +
+  geom_smooth() 
+
+O.lincorr.invarea<-ggplot(linO, aes(x=inv.area44, y=d18O.raw)) +
+  geom_smooth(method=lm) +
+  annotate("text", x = min(linO$inv.area44), y = max(linO$d18O.raw + 0.01), label = lm_eqn(linO$inv.area44, linO$d18O.raw),  size = 4, hjust=0, vjust=0, parse=TRUE) +
+  geom_point(shape=21, fill="black", size=2) +
+  geom_point(aes(x=inv.area44, y=d18O.lin), fill="red", shape=22) +
+  geom_hline(aes(yintercept=O.acc), size=.5) +
+  geom_hline(yintercept = linO.mean + linO.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = linO.mean - linO.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = linO.mean + 2*linO.sd, colour="red", linetype=3) +
+  geom_hline(yintercept = linO.mean - 2*linO.sd, colour="red", linetype=3) +
+  annotate("text",
+    y = linO.mean +0.01, 
+    x = min(linO$inv.area44),
+    label = paste0("mean: ", sprintf("%.2f", linO.mean), " \U00B1 ", sprintf("%.2f", linO.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE) +
+    theme_bw()
+
+O.lin.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=linO, aes(x=mass, y=area44), shape=21, fill="blue", size = 2) +
+  theme_bw()
+
+multiplot(O.lin.area44, O.lincorr.invarea, O.lin.mass, cols=3)
+```
+
+Assess effects: Apply linearity correction to the whole dataset of raw, and check the monitoring standards
+```{r apply.lin.corr.O, fig.width=10, fig.height=5}
+
+data$d18O.lin <- data$d18O.raw +  (O.acc - (lin.slopeO * data$inv.area44 + lin.interO))
+stds$d18O.lin <- stds$d18O.raw +  (O.acc - (lin.slopeO * stds$inv.area44 + lin.interO))
+
+linO.mon<-subset(stds, Identifier1==mon.std)
+linO.dis<-subset(stds, Identifier1==dis.std)
+linO.dis2<-subset(stds, Identifier1==dis2.std)
+
+(linO.mon.mean <- mean(linO.mon$d18O.lin))
+(linO.mon.sd<-sd(linO.mon$d18O.lin))
+
+O.stds.table$linO.mean <- c(linO.mean, linO.mon.mean, mean(linO.dis$d18O.lin), mean(linO.dis2$d18O.lin))
+O.stds.table$linO.sd <- c(linO.sd, linO.mon.sd, sd(linO.dis$d18O.lin), sd(linO.dis2$d18O.lin)) 
+
+O.mon.lin<-ggplot(linO.mon, aes(x=area44, y=d18O.lin)) +
+  geom_point(shape=21, fill="blue") +
+  geom_hline(yintercept = linO.mon.mean, colour="blue") +
+  geom_hline(yintercept = linO.mon.mean + linO.mon.sd, colour="blue", linetype="dashed") +
+  geom_hline(yintercept = linO.mon.mean - linO.mon.sd, colour="blue", linetype="dashed") +
+  geom_hline(yintercept = linO.mon.mean + 2*linO.mon.sd, colour="blue", linetype=3) +
+  geom_hline(yintercept = linO.mon.mean - 2*linO.mon.sd, colour="blue", linetype=3) +
+  annotate("text",
+    y = linO.mon.mean +0.01, 
+    x = min(linO.mon$area44),
+    label = paste0("mean: ", sprintf("%.2f", linO.mon.mean), " \U00B1 ", sprintf("%.2f", linO.mon.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE, colour="blue")
+
+O.mon.lin.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=linO.mon, aes(x=mass, y=area44), shape=21, fill="blue", size = 2) +
+  theme_bw()
+
+multiplot(O.mon.lin, O.mon.lin.mass, cols=2)
+```
+
+## O Combined linearity + drift correction
+Because a run can be affected by both drift and linearity, here we assess the affects of apply both the linearity and drift corrections to the raw data. This uses the linearity corrected values, and looks at the drift in those values
+```{r lindrift.O, fig.width=10, fig.height=5}
+
+lindriftO <- merge(driftO, data[c("row", "d18O.lin")], by.x="row", by.y="row", all.x=TRUE, all.y=FALSE, sort=FALSE)
+
+lindrift.slopeO<-(coef(lm(lindriftO$d18O.lin ~ lindriftO$row))[[2]])
+lindrift.interO<-(coef(lm(lindriftO$d18O.lin ~ lindriftO$row))[[1]])
+
+#drift check
+lindriftO$d18O.lindrift<- lindriftO$d18O.lin + (O.acc - (lindrift.slopeO * lindriftO$row + lindrift.interO))
+
+(lindriftO.mean<-mean(lindriftO$d18O.drift))
+(lindriftO.sd<-sd(lindriftO$d18O.drift))
+
+O.lindrift<-ggplot(lindriftO, aes(x=row, y=d18O.lin)) +
+  geom_smooth(method=lm, colour="black") +
+  annotate("text", x = min(lindriftO$row), y = max(lindriftO$d18O.lin + 0.01), label = lm_eqn(lindriftO$row, lindriftO$d18O.lin),  size = 4, hjust=0, vjust=0, parse=TRUE, colour="black") +
+  geom_point(shape=21, fill="black", size=2) +
+  geom_point(aes(x=row, y=d18O.lindrift), fill="red", shape=22, size=2) +
+  geom_hline(aes(yintercept=O.acc), size=.5) +
+  geom_hline(yintercept = lindriftO.mean + lindriftO.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = lindriftO.mean - lindriftO.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = lindriftO.mean + 2*lindriftO.sd, colour="red", linetype=3) +
+  geom_hline(yintercept = lindriftO.mean - 2*lindriftO.sd, colour="red", linetype=3) +
+  annotate("text",
+    y = lindriftO.mean +0.01, 
+    x = min(lindriftO$row),
+    label = paste0("mean: ", sprintf("%.2f", lindriftO.mean), " \U00B1 ", sprintf("%.2f", lindriftO.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE) +
+    theme_bw()
+
+O.lindrift.mass<-ggplot(stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=lindriftO, aes(x=mass, y=area44), shape=21, fill="red", size=3) +
+  theme_bw()
+
+multiplot(O.lindrift, O.lindrift.mass, cols=2)
+```
+
+Assess effects: Apply drift correction to the whole dataset of linearity corrected values, and check the monitoring standards
+```{r apply.lindrift.corr.O, fig.width=10, fig.height=5}
+data$d18O.lindrift <- data$d18O.lin +  (O.acc - (lindrift.slopeO * data$row + lindrift.interO))
+stds$d18O.lindrift <- stds$d18O.lin +  (O.acc - (lindrift.slopeO * stds$row + lindrift.interO))
+
+lindriftO.mon<-subset(stds, Identifier1==mon.std) 
+lindriftO.dis<-subset(stds, Identifier1==dis.std)
+lindriftO.dis2<-subset(stds, Identifier1==dis2.std)
+
+(lindriftO.mon.mean<-mean(lindriftO.mon$d18O.lindrift))
+(lindriftO.mon.sd<-sd(lindriftO.mon$d18O.lindrift))
+
+O.stds.table$lindriftO.mean <- cbind(c(lindriftO.mean, lindriftO.mon.mean, mean(lindriftO.dis$d18O.lindrift),  mean(lindriftO.dis2$d18O.lindrift)))
+O.stds.table$lindriftO.sd <- cbind(c(lindriftO.sd, lindriftO.mon.sd, sd(lindriftO.dis$d18O.lindrift), sd(lindriftO.dis2$d18O.lindrift))) 
+
+O.mon.drift<-ggplot(lindriftO.mon, aes(x=area44, y=d18O.lindrift)) +
+  geom_point(shape=21, fill="red") +
+  geom_hline(yintercept = lindriftO.mon.mean, colour="red") +
+  geom_hline(yintercept = lindriftO.mon.mean + lindriftO.mon.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = lindriftO.mon.mean - lindriftO.mon.sd, colour="red", linetype="dashed") +
+  geom_hline(yintercept = lindriftO.mon.mean + 2*lindriftO.mon.sd, colour="red", linetype=3) +
+  geom_hline(yintercept = lindriftO.mon.mean - 2*lindriftO.mon.sd, colour="red", linetype=3) +
+  annotate("text",
+    y = lindriftO.mon.mean +0.01, 
+    x = min(lindriftO.mon$area44),
+    label = paste0("mean: ", sprintf("%.2f", lindriftO.mon.mean), " \U00B1 ", sprintf("%.2f", lindriftO.mon.sd, 2), " \U2030 (1 sd)"),
+    size = 4, hjust=0, vjust=0, parse=FALSE, colour="red")
+
+O.mon.drift.mass<-ggplot (stds, aes(x=mass, y=area44)) +
+  stat_smooth(method="lm") +
+  geom_point(data=lindriftO.mon, aes(x=mass, y=area44), shape=21, fill="red", size = 2) +
+  theme_bw()
+
+multiplot(O.mon.drift, O.mon.drift.mass, cols=2)
+```
+
+## O Scale correction 
+Pick the appropriate column of either raw or corrected data to use in the scale regression. If there is no observable effects of linearity or drift (or both), use the raw values. The default is to select the raw values. Then this correct is applied to the whole dataset, using the same choice of previously corrected (or raw) values as used in making the scale correction
+```{r apply.scale.corr.O}
+
+# replace the character string here with the correction column you want to use
+col_for_scale_O <- "lindrift"  # options to substitute in here are: "raw" or "offset" or "drift" or  "lin" or  "lindrift"
+
+#make new table of measured scale correction values versus the accepted values
+col_in_data <- paste0("d18O.", col_for_scale_O)
+O.accepted <- O.stds.table %>%
+  select(std.name, O.acc)
+scale.stds <- stds %>%
+  #filter(Identifier1 == "NBS18" | Identifier1 == "YULE") %>%
+  rename(std.name = Identifier1)
+  
+scale.corr <-  left_join(scale.stds, O.accepted, by = "std.name") %>%
+  select(std.name, O.acc, col_in_data) %>%
+  rename(d18O = col_in_data)
+
+# safety checks
+if (!col_in_data %in% names(data)) stop("this column does not exist in data or stds table: ", col_in_data, call. = FALSE)
+
+# regression
+m <- lm(scale.corr$O.acc ~ scale.corr$d18O)
+scale.slopeO<-(coef(m)[[2]])
+scale.interO<-(coef(m)[[1]])
+R2 <- summary(m)$r.squared
+S <- summary(m)$sigma
+
+# apply correction
+data <- data %>%
+  mutate_(d18O.scale = lazyeval::interp(~scale.slopeO * var + scale.interO, var = as.name(col_in_data)))
+stds <- stds %>%
+  mutate_(d18O.scale = lazyeval::interp(~scale.slopeO * var + scale.interO, var = as.name(col_in_data)))
+
+O.scale.all <- 
+  ggplot(scale.corr, aes(x=d18O, y=O.acc)) +
+  geom_smooth(method="lm", color = "blue") +
+  geom_point(data=filter(data, d18O.sd<d18O.sd.cutoff), aes_string(x=col_in_data, y="d18O.scale"), shape=23, fill="red", size = 2) +
+  geom_point(shape=21, fill="blue", size = 2) +
+  geom_text(
+           x = max(scale.corr$d18O), 
+           y = max(scale.corr$O.acc), 
+           label = str_interp("O.acc = $[.2f]{slope} ${var} + $[.2f]{intercept} (R2: $[.4f]{R2}) (S: $[.3f]{S})", 
+                              list(slope = scale.slopeO, intercept = scale.interO, var = col_for_scale_O, R2 = R2, S = S)),
+           size = 4, hjust=1.1, vjust=0, colour="blue") +
+  labs(x = col_for_scale_O) +
+  theme_bw()
+
+O.scale.all
+```
+
+Assess effects: Check the monitoring standards after applying the scale correction
+```{r add_O_scale_to_stds.mean.table}
+scaleO.mon<-subset(stds, Identifier1==mon.std)
+scaleO.dis<-subset(stds, Identifier1==dis.std)
+scaleO.dis2<-subset(stds, Identifier1==dis2.std)
+scaleO.corr<-subset(stds, Identifier1==corr.std)
+
+(scaleO.mon.mean<-mean(scaleO.mon$d18O.scale))
+(scaleO.mon.sd<-sd(scaleO.mon$d18O.scale))
+
+O.stds.table$scaleO.mean <- c(mean(scaleO.corr$d18O.scale), scaleO.mon.mean, mean(scaleO.dis$d18O.scale), mean(scaleO.dis2$d18O.scale))
+O.stds.table$scaleO.sd <- c(sd(scaleO.corr$d18O.scale), scaleO.mon.sd, sd(scaleO.dis$d18O.scale), sd(scaleO.dis2$d18O.scale))
+```
+
+
+# dataset finalization
+## label analyses that should not be used, with explanations for culling, label with values were used in the scale correction
+```{r label-culled}
+#label as do not use
+#label as do not use
+data[data$Analysis == 20289, "Do_not_use"] <- "yes"     
+data[data$Analysis == 9426, "Do_not_use"] <- "yes"
+data[data$Analysis == 9431, "Do_not_use"] <- "yes"
+data[data$Analysis == 9435, "Do_not_use"] <- "yes"
+data[data$Analysis == 9439, "Do_not_use"] <- "yes"
+data[data$Analysis == 9446, "Do_not_use"] <- "yes"
+data[data$Analysis == 9455, "Do_not_use"] <- "yes"
+data[data$Analysis == 9462, "Do_not_use"] <- "yes"
+data[data$Analysis == 9469, "Do_not_use"] <- "yes"
+data[data$Analysis == 9483, "Do_not_use"] <- "yes"
+data[data$Analysis == 9488, "Do_not_use"] <- "yes"
+data[data$Analysis == 9490, "Do_not_use"] <- "yes"
+
+# label those samples with reason they were culled, in main dataset
+data[data$Analysis == 20289, "Why_culled"] <- "large between peak standard deviations (st)"     
+data[data$Analysis == 9426, "Why_culled"] <- "large between peak standard deviations (st)"
+data[data$Analysis == 9431, "Why_culled"] <- "large between peak standard deviations (st)"
+data[data$Analysis == 9435, "Why_culled"] <- "high between peak stdev; big half peak could affect data?) (sa)"
+data[data$Analysis == 9439, "Why_culled"] <- "too small (sa)"
+data[data$Analysis == 9446, "Why_culled"] <- "too small (sa)"
+data[data$Analysis == 9455, "Why_culled"] <- "too small (sa)"
+data[data$Analysis == 9462, "Why_culled"] <- "too small; sd ok but smaller than linearity range (sa)"
+data[data$Analysis == 9469, "Why_culled"] <- "too small; high between peak stdev; had atm (sa)"
+data[data$Analysis == 9483, "Why_culled"] <- "acid clog in the needle, so no gas associated with this standard (st)"
+data[data$Analysis == 9488, "Why_culled"] <- "too small; high between peak stdev (sa)"
+data[data$Analysis == 9490, "Why_culled"] <- "too small; high between peak stdev (sa)"
+
+# label those samples with reason they were culled, in culled dataset
+culled.data[culled.data$Analysis == 9423, "Why_culled"] <- "large between peak standard deviations (st)"     
+culled.data[culled.data$Analysis == 9426, "Why_culled"] <- "large between peak standard deviations (st)"
+culled.data[culled.data$Analysis == 9431, "Why_culled"] <- "large between peak standard deviations (st)"
+culled.data[culled.data$Analysis == 9435, "Why_culled"] <- "high between peak stdev; big half peak could affect data?) (sa)"
+culled.data[culled.data$Analysis == 9439, "Why_culled"] <- "too small (sa)"
+culled.data[culled.data$Analysis == 9446, "Why_culled"] <- "too small (sa)"
+culled.data[culled.data$Analysis == 9455, "Why_culled"] <- "too small (sa)"
+culled.data[culled.data$Analysis == 9462, "Why_culled"] <- "too small; sd ok but smaller than linearity range (sa)"
+culled.data[culled.data$Analysis == 9469, "Why_culled"] <- "too small; high between peak stdev; had atm (sa)"
+culled.data[culled.data$Analysis == 9483, "Why_culled"] <- "acid clog in the needle, so no gas associated with this standard (st)"
+culled.data[culled.data$Analysis == 9488, "Why_culled"] <- "too small; high between peak stdev (sa)"
+culled.data[culled.data$Analysis == 9490, "Why_culled"] <- "too small; high between peak stdev (sa)"
+
+#add column that tells values used in the scale correction
+data$d13C_scale_input <- col_for_scale_C
+data$d18O_scale_input <- col_for_scale_O
+data$Run <- Run
+
+# reorder columns for more readable output in output file
+data <- data %>%
+  select(Run,row, file_id, Analysis, Identifier1, mass, type, num.peaks, area44, area44.sd, inv.area44, PercentCO3, d13C.raw, d13C.sd, d13C.offset, d13C.drift, d13C.lin, d13C.lindrift, d13C.scale, d13C_scale_input, d18O.raw.SMOW, d18O.sd, d18O.raw, d18O.offset, d18O.drift, d18O.lin, d18O.lindrift, d18O.scale, d18O_scale_input, Do_not_use, Why_culled)
+#creates subset of just samples and fully corrected data.
+keydata <- data %>% ungroup() %>%  filter(!(Identifier1 %in% c(corr.std, mon.std, dis.std, dis2.std))) %>% select(Run,Analysis, Identifier1, mass,d13C.scale,d13C.error.S, d18O.scale,d18O.error.S,PercentCO3, Do_not_use, Why_culled)
+
+```
+
+
+## save data to spreadsheet
+```{r save.data}
+add_ws_with_data <- function(wb, sheet, data) {
+  addWorksheet(wb, sheet)
+  writeData(wb, sheet=sheet, data)
+  return(wb)
+}
+
+wb <- createWorkbook("data") 
+wb <- add_ws_with_data(wb, "key data", keydata)
+wb <- add_ws_with_data(wb, "all data corrected", data)
+wb <- add_ws_with_data(wb, "offsetC", offsetC)
+wb <- add_ws_with_data(wb, "driftC", driftC)
+wb <- add_ws_with_data(wb, "linC", linC)
+wb <- add_ws_with_data(wb, "lindriftC", lindriftC)
+wb <- add_ws_with_data(wb, "C Stds means", C.stds.table)
+wb <- add_ws_with_data(wb, "offsetO", offsetO)
+wb <- add_ws_with_data(wb, "driftO", driftO)
+wb <- add_ws_with_data(wb, "linO", linO)
+wb <- add_ws_with_data(wb, "lindriftO", lindriftO)
+wb <- add_ws_with_data(wb, "O Stds means", O.stds.table)
+wb <- add_ws_with_data(wb, "all stds used", stds)
+wb <- add_ws_with_data(wb, "culled data", culled.data)
+saveWorkbook(wb, paste0(session, "_corrected_data.xlsx"), overwrite = TRUE)
+```
+
