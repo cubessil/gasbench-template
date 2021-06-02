@@ -652,6 +652,7 @@ scale.slopeC<-(coef(m)[[2]])
 scale.interC<-(coef(m)[[1]])
 R2 <- summary(m)$r.squared
 S <- summary(m)$sigma
+d13C.error.S <- S
 
 # apply correction
 data <- data %>%
@@ -1022,6 +1023,7 @@ scale.slopeO<-(coef(m)[[2]])
 scale.interO<-(coef(m)[[1]])
 R2 <- summary(m)$r.squared
 S <- summary(m)$sigma
+d18O.error.S <- S
 
 # apply correction
 data <- data %>%
