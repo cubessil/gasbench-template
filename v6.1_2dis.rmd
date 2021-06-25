@@ -18,7 +18,20 @@ editor_options:
 ---
 
 # Summary of data reduction and run:
-                  
+
+XXXX add in a description of how the run went xxxxx
+
+Precision on the scale corrections were +/ x.xxx permil (d13C) and +/- x.xxx permil (d18O). All analyses (samples = sa, standards = st) culled are listed below (see output file for details on culling):
+
+Examples:
+- xxxx - major outlier in d13C and d18O; exact reason not clear (st)
+- xxxx - yield problem; too small and so had high between peak stdevs (st)
+- xxxx - Sample XXXX; too small; high between peak stdev; 20 peaks so likely atmosphere leak (sa) 
+- xxxx - yield problem; too large and outlier in d13C and d18O (st)
+- xxxx - yield problem; too small; high between peak stdev; 20 peaks so likely atmosphere leak (st)
+- xxxx - major outlier in d13C and d18O; exact reason not clear (st)
+- xxxx - smaller than linearity bracket (sa)
+- xxxx - major outlier in d13C and d18O; exact reason not clear (st)                  
                     
 # Load libraries, data, and define standards
 ## load necessary R libraries and data, define accepted standard values for correcting standards
@@ -1068,46 +1081,20 @@ O.stds.table$scaleO.sd <- c(sd(scaleO.corr$d18O.scale), scaleO.mon.sd, sd(scaleO
 ```{r label-culled}
 #label as do not use
 #label as do not use
-data[data$Analysis == 20289, "Do_not_use"] <- "yes"     
-data[data$Analysis == 9426, "Do_not_use"] <- "yes"
-data[data$Analysis == 9431, "Do_not_use"] <- "yes"
-data[data$Analysis == 9435, "Do_not_use"] <- "yes"
-data[data$Analysis == 9439, "Do_not_use"] <- "yes"
-data[data$Analysis == 9446, "Do_not_use"] <- "yes"
-data[data$Analysis == 9455, "Do_not_use"] <- "yes"
-data[data$Analysis == 9462, "Do_not_use"] <- "yes"
-data[data$Analysis == 9469, "Do_not_use"] <- "yes"
-data[data$Analysis == 9483, "Do_not_use"] <- "yes"
-data[data$Analysis == 9488, "Do_not_use"] <- "yes"
-data[data$Analysis == 9490, "Do_not_use"] <- "yes"
+data[data$Analysis == xxxx, "Do_not_use"] <- "yes"     
+data[data$Analysis == xxxx, "Do_not_use"] <- "yes"
 
 # label those samples with reason they were culled, in main dataset
-data[data$Analysis == 20289, "Why_culled"] <- "large between peak standard deviations (st)"     
-data[data$Analysis == 9426, "Why_culled"] <- "large between peak standard deviations (st)"
-data[data$Analysis == 9431, "Why_culled"] <- "large between peak standard deviations (st)"
-data[data$Analysis == 9435, "Why_culled"] <- "high between peak stdev; big half peak could affect data?) (sa)"
-data[data$Analysis == 9439, "Why_culled"] <- "too small (sa)"
-data[data$Analysis == 9446, "Why_culled"] <- "too small (sa)"
-data[data$Analysis == 9455, "Why_culled"] <- "too small (sa)"
-data[data$Analysis == 9462, "Why_culled"] <- "too small; sd ok but smaller than linearity range (sa)"
-data[data$Analysis == 9469, "Why_culled"] <- "too small; high between peak stdev; had atm (sa)"
-data[data$Analysis == 9483, "Why_culled"] <- "acid clog in the needle, so no gas associated with this standard (st)"
-data[data$Analysis == 9488, "Why_culled"] <- "too small; high between peak stdev (sa)"
-data[data$Analysis == 9490, "Why_culled"] <- "too small; high between peak stdev (sa)"
+data[data$Analysis == xxxx, "Why_culled"] <- "large between peak standard deviations (st)"     
+data[data$Analysis == xxxx, "Why_culled"] <- "high between peak stdev; big half peak could affect data?) (sa)"
+data[data$Analysis == xxxx, "Why_culled"] <- "too small (sa)"
+data[data$Analysis == xxxx, "Why_culled"] <- "too small; sd ok but smaller than linearity range (sa)"
 
 # label those samples with reason they were culled, in culled dataset
-culled.data[culled.data$Analysis == 9423, "Why_culled"] <- "large between peak standard deviations (st)"     
-culled.data[culled.data$Analysis == 9426, "Why_culled"] <- "large between peak standard deviations (st)"
-culled.data[culled.data$Analysis == 9431, "Why_culled"] <- "large between peak standard deviations (st)"
-culled.data[culled.data$Analysis == 9435, "Why_culled"] <- "high between peak stdev; big half peak could affect data?) (sa)"
-culled.data[culled.data$Analysis == 9439, "Why_culled"] <- "too small (sa)"
-culled.data[culled.data$Analysis == 9446, "Why_culled"] <- "too small (sa)"
-culled.data[culled.data$Analysis == 9455, "Why_culled"] <- "too small (sa)"
-culled.data[culled.data$Analysis == 9462, "Why_culled"] <- "too small; sd ok but smaller than linearity range (sa)"
-culled.data[culled.data$Analysis == 9469, "Why_culled"] <- "too small; high between peak stdev; had atm (sa)"
-culled.data[culled.data$Analysis == 9483, "Why_culled"] <- "acid clog in the needle, so no gas associated with this standard (st)"
-culled.data[culled.data$Analysis == 9488, "Why_culled"] <- "too small; high between peak stdev (sa)"
-culled.data[culled.data$Analysis == 9490, "Why_culled"] <- "too small; high between peak stdev (sa)"
+culled.data[culled.data$Analysis == xxxx, "Why_culled"] <- "large between peak standard deviations (st)"     
+culled.data[culled.data$Analysis == xxxx, "Why_culled"] <- "high between peak stdev; big half peak could affect data?) (sa)"
+culled.data[culled.data$Analysis == xxxx, "Why_culled"] <- "too small (sa)"
+culled.data[culled.data$Analysis == xxxx, "Why_culled"] <- "too small; sd ok but smaller than linearity range (sa)"
 
 #add column that tells values used in the scale correction
 data$d13C_scale_input <- col_for_scale_C
