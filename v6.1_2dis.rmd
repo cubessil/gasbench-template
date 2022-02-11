@@ -329,7 +329,7 @@ C.stds.table$rawC.mean <- c(mean(raw.corr$d13C.raw), mean(raw.mon$d13C.raw), mea
 C.stds.table$rawC.sd <- c(sd(raw.corr$d13C.raw), sd(raw.mon$d13C.raw), sd(raw.dis$d13C.raw), sd(raw.dis2$d13C.raw))
 
 O.stds.table$rawO.mean <- c(mean(raw.corr$d18O.raw), mean(raw.mon$d18O.raw), mean(raw.dis$d18O.raw), mean(raw.dis2$d18O.raw))
-O.stds.table$rawO.sd <- c(sd(raw.corr$d18O.raw), sd(raw.mon$d18O.raw), sd(raw.dis$d18O.raw), sd(raw.dis$d18O.raw))
+O.stds.table$rawO.sd <- c(sd(raw.corr$d18O.raw), sd(raw.mon$d18O.raw), sd(raw.dis$d18O.raw), sd(raw.dis2$d18O.raw))
 
 ```
 
@@ -538,7 +538,7 @@ linC.dis2<-subset(stds, Identifier1==dis2.std)
 (linC.mon.sd<-sd(linC.mon$d13C.lin))
 
 C.stds.table$linC.mean <- c(linC.mean, linC.mon.mean, mean(linC.dis$d13C.lin),mean(linC.dis2$d13C.lin))
-C.stds.table$linC.sd <- c(linC.sd, linC.mon.sd, sd(linC.dis$d13C.lin), sd(linC.dis$d13C.lin))
+C.stds.table$linC.sd <- c(linC.sd, linC.mon.sd, sd(linC.dis$d13C.lin), sd(linC.dis2$d13C.lin))
 
 C.mon.lin<-ggplot(linC.mon, aes(x=area44, y=d13C.lin)) +
   geom_point(shape=21, fill="blue") +
@@ -614,7 +614,7 @@ lindriftC.dis2<-subset(stds, Identifier1==dis2.std)
 (lindriftC.mon.sd<-sd(lindriftC.mon$d13C.lindrift))
 
 C.stds.table$lindriftC.mean <- c(lindriftC.mean, lindriftC.mon.mean, mean(lindriftC.dis$d13C.lindrift), mean(lindriftC.dis2$d13C.lindrift))
-C.stds.table$lindriftC.sd <- c(lindriftC.sd, lindriftC.mon.sd, sd(lindriftC.dis$d13C.lindrift),sd(lindriftC.dis$d13C.lindrift))
+C.stds.table$lindriftC.sd <- c(lindriftC.sd, lindriftC.mon.sd, sd(lindriftC.dis$d13C.lindrift),sd(lindriftC.dis2$d13C.lindrift))
 
 C.mon.drift<-ggplot(lindriftC.mon, aes(x=area44, y=d13C.lindrift)) +
   geom_point(shape=21, fill="red") +
@@ -655,7 +655,7 @@ scale.stds <- stds %>%
 scale.corr <-  left_join(scale.stds, C.accepted, by = "std.name") %>%
   select(std.name, C.acc, col_in_data) %>%
   rename(d13C = col_in_data)
-F
+
 # safety checks
 if (!col_in_data %in% names(data)) stop("this column does not exist in data or stds table: ", col_in_data, call. = FALSE)
 
@@ -829,7 +829,7 @@ driftO.dis2 <- subset(stds, Identifier1==dis2.std)
 (driftO.mon.sd<-sd(driftO.mon$d18O.drift))
 
 O.stds.table$driftO.mean <- c(driftO.mean, driftO.mon.mean, mean(driftO.dis$d18O.drift), mean(driftO.dis2$d18O.drift))
-O.stds.table$driftO.sd <- c(driftO.sd, driftO.mon.sd, sd(driftO.dis$d18O.drift), sd(driftO.dis$d18O.drift)) 
+O.stds.table$driftO.sd <- c(driftO.sd, driftO.mon.sd, sd(driftO.dis$d18O.drift), sd(driftO.dis2$d18O.drift)) 
 
 O.mon.drift<-ggplot(driftO.mon, aes(x=area44, y=d18O.drift)) +
   geom_point(shape=21, fill="red") +
