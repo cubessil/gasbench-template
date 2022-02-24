@@ -373,7 +373,7 @@ offsetC.dis2 <- filter(stds, type == "dis2.std")
 
 #check monitoring standard response
 offsetC.mon.mean <- mean(offsetC.mon$d13C.offset)
-offsetC.mon.sd< - sd(offsetC.mon$d13C.offset)
+offsetC.mon.sd <- sd(offsetC.mon$d13C.offset)
 
 C.stds.table$offsetC.mean <- c(offsetcorrC.mean, offsetC.mon.mean, mean(offsetC.dis$d13C.offset), mean(offsetC.dis2$d13C.offset))
 C.stds.table$offsetC.sd <- c(offsetcorrC.sd, offsetC.mon.sd, sd(offsetC.dis$d13C.offset), sd(offsetC.dis2$d13C.offset))
@@ -488,7 +488,7 @@ lin.slopeC <- (coef(lm(linC$d13C.raw ~ linC$inv.area44))[[2]])
 lin.interC <- (coef(lm(linC$d13C.raw ~ linC$inv.area44))[[1]])
 
 #linearity check
-linC$d13C.lin <- linC$d13C.raw + (C.stds.table, std.type == "corr.std")$C.acc - (lin.slopeC * linC$inv.area44 + lin.interC))
+linC$d13C.lin <- linC$d13C.raw + (filter(C.stds.table, std.type == "corr.std")$C.acc - (lin.slopeC * linC$inv.area44 + lin.interC))
 
 linC.mean <- mean(linC$d13C.lin)
 linC.sd <- sd(linC$d13C.lin)
@@ -655,7 +655,7 @@ col_in_data <- paste0("d13C.", col_for_scale_C)
 
 C.scale.stds <- C.stds.table %>%
   select(std.name, C.acc) %>%
-  filter(C.acc == max(C.acc) | C.acc == min(C.acc))
+  filter(C.acc == max(C.acc, na.rm = TRUE) | C.acc == min(C.acc, na.rm = TRUE))
   
 scale.stds <- stds %>%
   rename(std.name = Identifier1) %>%
@@ -896,7 +896,7 @@ O.lincorr.invarea <- ggplot(linO, aes(x = inv.area44, y = d18O.raw)) +
     size = 4, hjust = 0, vjust = 0, parse = TRUE) +
   geom_point(shape = 21, fill = "black", size = 2 ) +
   geom_point(aes(x = inv.area44, y = d18O.lin), fill = "red", shape = 22) +
-  geom_hline(aes(yintercept = O.acc), size = .5) +
+  geom_hline(aes(yintercept = filter(O.stds.table, std.type == "corr.std")$O.acc), size = .5) +
   geom_hline(yintercept = linO.mean + linO.sd, colour = "red", linetype = "dashed") +
   geom_hline(yintercept = linO.mean - linO.sd, colour = "red", linetype = "dashed") +
   geom_hline(yintercept = linO.mean + 2*linO.sd, colour = "red", linetype = 3) +
@@ -1045,7 +1045,7 @@ col_in_data <- paste0("d18O.", col_for_scale_O)
 
 O.scale.stds <- O.stds.table %>%
   select(std.name, O.acc) %>%
-  filter(C.acc == max(O.acc) | O.acc == min(O.acc))
+  filter(O.acc == max(O.acc, na.rm = TRUE) | O.acc == min(O.acc, na.rm = TRUE))
   
 scale.stds <- stds %>%
   rename(std.name = Identifier1) %>%
