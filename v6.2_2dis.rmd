@@ -23,15 +23,15 @@ XXXX add in a description of how the run went xxxxx
 
 Precision on the scale corrections were +/ x.xxx permil (d13C) and +/- x.xxx permil (d18O). All analyses (samples = sa, standards = st) culled are listed below (see output file for details on culling):
 
-Examples:
-- xxxx - major outlier in d13C and d18O; exact reason not clear (st)
-- xxxx - yield problem; too small and so had high between peak stdevs (st)
-- xxxx - Sample XXXX; too small; high between peak stdev; 20 peaks so likely atmosphere leak (sa) 
-- xxxx - yield problem; too large and outlier in d13C and d18O (st)
-- xxxx - yield problem; too small; high between peak stdev; 20 peaks so likely atmosphere leak (st)
-- xxxx - major outlier in d13C and d18O; exact reason not clear (st)
-- xxxx - smaller than linearity bracket (sa)
-- xxxx - major outlier in d13C and d18O; exact reason not clear (st)                  
+## Specific Analyses:
+* xxxx - major outlier in d13C and d18O; exact reason not clear (st)
+* xxxx - yield problem; too small and so had high between peak stdevs (st)
+* xxxx - Sample XXXX; too small; high between peak stdev; 20 peaks so likely atmosphere leak (sa) 
+* xxxx - yield problem; too large and outlier in d13C and d18O (st)
+* xxxx - yield problem; too small; high between peak stdev; 20 peaks so likely atmosphere leak (st)
+* xxxx - major outlier in d13C and d18O; exact reason not clear (st)
+* xxxx - smaller than linearity bracket (sa)
+* xxxx - major outlier in d13C and d18O; exact reason not clear (st)                  
                     
 # Load libraries, data, and define standards
 ## load necessary R libraries and data, define accepted standard values for correcting standards
@@ -1133,7 +1133,7 @@ data <- data %>%
 #creates subset of just samples with no culled or "do not use" entries
 samples <- data %>% 
   filter(type == "sample") %>%
-  filter(!(Identifier1 %in% culled.data)) %>% 
+  anti_join(culled.data, by = "Identifier1") %>% 
   select(Run, Analysis, Identifier1, mass, d13C.scale, d13C.error.S, d18O.scale, d18O.error.S, PercentCO3, Do_not_use, Why_culled)
 ```
 
