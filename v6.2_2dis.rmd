@@ -480,7 +480,7 @@ multiplot(C.mon.drift, C.mon.drift.mass, cols=2)
 ```
 
 ## C Linearity correction
-Using the raw values, assess drift in isotope values throughout the run
+Using the raw values, assess linearity in isotope values throughout the run
 ```{r linearityC, fig.width = 10, fig.height = 5}
 linC <- filter(stds, type == "lin.std") 
 
