@@ -870,7 +870,7 @@ multiplot(O.mon.drift, O.mon.drift.mass, cols = 2)
 ```
 
 ## O Linearity correction
-Using the raw values, assess drift in isotope values throughout the run
+Using the raw values, assess linearity in isotope values throughout the run
 ```{r linearityO, fig.width = 10, fig.height = 5}
 linO <- filter(stds, type == "lin.std")
 
